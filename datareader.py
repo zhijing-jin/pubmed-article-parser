@@ -53,8 +53,8 @@ class Dataset:
         country_checker = CountryChecker()
         en = country_checker.english_speaking_countries
         if_native = lambda x: not (x - en)
-        if_native = lambda x: x == {'United States'}
-        if_non_native = lambda x: not (x & en)
+        # if_native = lambda x: x == {'United States'}
+        # if_non_native = lambda x: not (x & en)
         if_non_native = lambda x: x == {'China'}
 
         articles_non_native = []
