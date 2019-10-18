@@ -4,13 +4,16 @@ def check_env():
         import lxml
         import requests
         import selenium
+        import spacy
         import xmltodict
         import efficiency
         import email2country
     except:
         import os
-        os.system('pip install tqdm xmltodict lxml efficiency email2country')
+        os.system('pip install tqdm xmltodict lxml spacy efficiency email2country')
 
+check_env()
+from email2country import EmailCountryChecker
 
 class Dataset:
     def __init__(self, files):
@@ -22,18 +25,19 @@ class Dataset:
         for file in files:
             doc = self.load_file(file)
             self.articles += self.parse(doc, file)
+        print('[Info] {} articles'.format(len(self.articles)))
 
         self.articles_non_native, self.articles_native = \
             self.split_by_nation()
         txt_native = self.get_txt(self.articles_native)
-        txt_non_native = self.get_txt(self.articles_non_native)
-        native_txt, non_native_txt, eval_native, eval_non_native = \
+        txt_non_native = self.get_txt(self.articles_non_native, 'articles_non_native.txt')
+        txt_native, txt_non_native, eval_native, eval_non_native = \
             self.postprocess_txt(txt_native, txt_non_native)
 
         self.save_csv(txt_native, txt_non_native,
-                      file='articles_classified.csv')
-        self.save_csv(eval_native, eval_non_native, file='articles_eval.csv')
-        self.run_classifier(file='articles_classified.csv')
+                      file='articles_classified1.csv')
+        self.save_csv(eval_native, eval_non_native, file='articles_eval1.csv')
+        self.run_classifier(file='articles_classified1.csv')
 
     @staticmethod
     def load_file(file):
@@ -65,17 +69,16 @@ class Dataset:
 
         country_checker = CountryChecker()
         en = country_checker.english_speaking_countries
-        if_native = lambda x: not (x - en)
+        if_native = lambda x: not (x - (en | {None}))
         # if_native = lambda x: x == {'United States'}
         # if_non_native = lambda x: not (x & en)
         if_non_native = lambda x: x == {'China'}
-        if_useless = lambda x: (not x) or (None in x)
+        if_useless = lambda x: (not x) # or (None in x)
 
         articles_non_native = []
         articles_native = []
 
-        pbar = tqdm(self.articles)
-        pbar.set_description('Getting Countries')
+        pbar = tqdm(self.articles, desc='Got 0 valid countries')
 
         for article in pbar:
             countries = article.set_countries(country_checker)
@@ -87,8 +90,7 @@ class Dataset:
                 articles_non_native.append(article)
 
             total_len = len(articles_non_native) + len(articles_native)
-            pbar.set_description('Getting Countries ({})'.format(total_len))
-            pbar.refresh()
+            pbar.set_description('Got {} valid countries'.format(total_len), refresh=True)
 
         return articles_non_native, articles_native
 
@@ -101,10 +103,10 @@ class Dataset:
         nlp = NLP()
         text = []
 
-        pbar = tqdm(articles)
-        pbar.set_description('Sent_Tok to {}'.format(file))
+        pbar = tqdm(articles, desc='{} sents to {}'.format(0,file))
         for article in pbar:
             text += article.clean_paper(nlp)
+            pbar.set_description('{} sents to {}'.format(len(text),file), refresh=True)
 
         if file:
             fwrite('\n'.join(text), file)
@@ -127,6 +129,7 @@ class Dataset:
 
             native_txt = native_txt[:min_len]
             non_native_txt = non_native_txt[:min_len]
+            import pdb;pdb.set_trace()
         return native_txt, non_native_txt, eval_native, eval_non_native
 
     @staticmethod
@@ -280,7 +283,6 @@ class Article:
         return author_dics
 
 
-from email2country import EmailCountryChecker
 
 
 class CountryChecker(EmailCountryChecker):
@@ -358,12 +360,11 @@ def download():
 def main():
     import os
 
-    check_env()
     # download()
 
     folder = 'data/'
-    # fname = 'pmc_result (3).xml'
     fnames = [
+        # 'pmc_result.small.xml',
         'pmc_result_20100101_20161231.xml',
         'pmc_result_20170101_20191016.xml',
     ]
