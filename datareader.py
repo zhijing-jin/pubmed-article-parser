@@ -13,29 +13,42 @@ def check_env():
 
 
 class Dataset:
-    def __init__(self, file):
-        self.doc = self.load_file(file)
-        self.articles = self.parse()
+    def __init__(self, files):
+        from efficiency.log import show_time
+
+        show_time('[Info] files: {}'.format(files))
+
+        self.articles = []
+        for file in files:
+            doc = self.load_file(file)
+            self.articles += self.parse(doc, file)
 
         self.articles_non_native, self.articles_native = \
             self.split_by_nation()
-        txt_native = self.get_txt(self.articles_native, file='')
-        txt_non_native = self.get_txt(self.articles_non_native, file='')
+        txt_native = self.get_txt(self.articles_native)
+        txt_non_native = self.get_txt(self.articles_non_native)
+        native_txt, non_native_txt, eval_native, eval_non_native = \
+            self.postprocess_txt(txt_native, txt_non_native)
+
         self.save_csv(txt_native, txt_non_native,
                       file='articles_classified.csv')
+        self.save_csv(eval_native, eval_non_native, file='articles_eval.csv')
+        self.run_classifier(file='articles_classified.csv')
 
-    def load_file(self, file):
+    @staticmethod
+    def load_file(file):
         from lxml import etree
         doc = etree.parse(file)
 
         return doc
 
-    def parse(self):
+    @staticmethod
+    def parse(doc, file):
         from tqdm import tqdm
 
         articles = []
-        pbar = tqdm(self.doc.iter('article'))
-        pbar.set_description('Parsing Articles')
+        pbar = tqdm(doc.iter('article'))
+        pbar.set_description('Parsing Articles from ' + file)
         for article in pbar:
             if not (article.xpath('.//front//contrib-group')
                     and article.xpath('.//body')):
@@ -56,6 +69,7 @@ class Dataset:
         # if_native = lambda x: x == {'United States'}
         # if_non_native = lambda x: not (x & en)
         if_non_native = lambda x: x == {'China'}
+        if_useless = lambda x: (not x) or (None in x)
 
         articles_non_native = []
         articles_native = []
@@ -66,7 +80,7 @@ class Dataset:
         for article in pbar:
             countries = article.set_countries(country_checker)
             # item = (article.data['countries'], article.data['affs'])
-            if not countries: continue
+            if if_useless(countries): continue
             if if_native(countries):
                 articles_native.append(article)
             elif if_non_native(countries):
@@ -97,19 +111,53 @@ class Dataset:
         return text
 
     @staticmethod
-    def save_csv(native_txt, non_native_txt, file='articles_classified.csv'):
-        import csv
+    def postprocess_txt(native_txt, non_native_txt, eval_size=100, even=True):
+        eval_native = []
+        eval_non_native = []
+        if even:
+            import random
 
-        writeout = [('native', line) for line in native_txt]
-        writeout += [('non_native', line) for line in non_native_txt]
+            min_len = min(len(native_txt), len(non_native_txt))
+            min_len -= eval_size
+            random.shuffle(native_txt)
+            random.shuffle(non_native_txt)
+            if eval_size:
+                eval_native = native_txt[-eval_size:]
+                eval_non_native = non_native_txt[-eval_size:]
+
+            native_txt = native_txt[:min_len]
+            non_native_txt = non_native_txt[:min_len]
+        return native_txt, non_native_txt, eval_native, eval_non_native
+
+    @staticmethod
+    def save_csv(txt_native, txt_non_native, file='articles_classified.csv'):
+        import csv
+        from efficiency.log import show_time
+
         with open(file, 'w') as f:
+            writeout = [('native', line) for line in txt_native]
+            writeout += [('non_native', line) for line in txt_non_native]
+
             writer = csv.writer(f)
             writer.writerows(writeout)
 
-        print('[Info] Saved {} sentences to {}'.format(len(writeout), file))
-        # cmd = 'cp {} ../1909_prac_cls/data/pubmed/data.csv'.format(file)
-        # from efficiency.function import shell
-        # shell(cmd)
+        show_time('[Info] Saved {}+{} sentences to {}'
+                  .format(len(txt_native), len(txt_non_native), file))
+
+    @staticmethod
+    def run_classifier(file):
+        import os
+        from efficiency.log import show_time
+
+        cmd = 'cp {} ../1909_prac_cls/data/pubmed/data.csv; ' \
+              'cd ../1909_prac_cls/; ' \
+              'python train.py -lower ' \
+              '-data_dir data/pubmed -train_fname data.csv' \
+              ''.format(file)
+        import pdb;
+        pdb.set_trace()
+        os.system(cmd)
+        show_time('[Info] Finished classification')
 
 
 def lxml_get_1elem(lxml_obj, xpath):
@@ -255,7 +303,7 @@ class CountryChecker(EmailCountryChecker):
             # 'Dominica',
             # 'Grenada',
             # 'Guyana',
-            # 'Ireland',
+            'Ireland',
             # 'Jamaica',
             'New Zealand',
             # 'St Kitts and Nevis',
@@ -315,10 +363,13 @@ def main():
 
     folder = 'data/'
     # fname = 'pmc_result (3).xml'
-    fname = 'pmc_result.xml'
-    file = os.path.join(folder, fname)
+    fnames = [
+        'pmc_result_20100101_20161231.xml',
+        'pmc_result_20170101_20191016.xml',
+    ]
+    files = [os.path.join(folder, fname) for fname in fnames]
 
-    dataset = Dataset(file)
+    dataset = Dataset(files)
 
 
 if __name__ == '__main__':
