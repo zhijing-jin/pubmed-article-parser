@@ -10,44 +10,80 @@ def check_env():
         import email2country
     except:
         import os
-        os.system('pip install tqdm xmltodict lxml spacy efficiency email2country')
+        os.system(
+            'pip install tqdm xmltodict lxml spacy efficiency ted_talk_downloader')
 
-check_env()
+
+# check_env()
 from email2country import EmailCountryChecker
 
+
 class Dataset:
-    def __init__(self, files):
+    def __init__(self, files, use_all_secs=True, save_to=1):
+        import pickle
         from efficiency.log import show_time
 
-        show_time('[Info] files: {}'.format(files))
+        show_time('[Info] files: {}, use_all_secs:{}, save_to:{}'
+                  .format(files, use_all_secs, save_to))
 
-        self.articles = []
-        for file in files:
-            doc = self.load_file(file)
-            self.articles += self.parse(doc, file)
-        print('[Info] {} articles'.format(len(self.articles)))
+        with open('articles{}.pickle'.format(save_to), 'rb') as f:
+            self.articles = pickle.load(f)
 
+        # self.articles = []
+        # for file in files:
+        #     doc = self.load_file(file)
+        #     self.articles += self.parse(doc, file, use_all_secs=use_all_secs)
+        # print('[Info] {} articles'.format(len(self.articles)))
+        # self.save('articles{}.pickle'.format(save_to))
+        # self.save_ids('pmids{}.txt'.format(save_to))
+
+        self.filter_by_ids()
         self.articles_non_native, self.articles_native = \
             self.split_by_nation()
-        txt_native = self.get_txt(self.articles_native)
-        txt_non_native = self.get_txt(self.articles_non_native, 'articles_non_native.txt')
+        txt_native = self.get_txt(self.articles_native,
+                                  'articles_native{}.txt'.format(save_to))
+        txt_non_native = self.get_txt(self.articles_non_native,
+                                      'articles_non_native{}.txt'.format(
+                                          save_to))
+        import pdb;pdb.set_trace()
         txt_native, txt_non_native, eval_native, eval_non_native = \
             self.postprocess_txt(txt_native, txt_non_native)
 
         self.save_csv(txt_native, txt_non_native,
-                      file='articles_classified1.csv')
-        self.save_csv(eval_native, eval_non_native, file='articles_eval1.csv')
-        self.run_classifier(file='articles_classified1.csv')
+                      file='articles_classified{}.csv'.format(save_to))
+        self.save_csv(eval_native, eval_non_native,
+                      file='articles_eval{}.csv'.format(save_to))
+        self.run_classifier(file='articles_classified{}.csv'.format(save_to))
 
     @staticmethod
     def load_file(file):
         from lxml import etree
+        from efficiency.log import show_time
+
+        show_time('[Info] Loading file in')
         doc = etree.parse(file)
+        show_time('[Info] Finished loading file in')
 
         return doc
 
+    def save(self, file):
+        import pickle
+
+        with open(file, 'wb') as handle:
+            pickle.dump(self.articles, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+    def save_ids(self, file):
+        from efficiency.log import fwrite
+        pmids = [a.data['pmid'] for a in self.articles]
+        fwrite('\n'.join(pmids), file)
+
+    def filter_by_ids(self):
+        with open('pmids2.txt') as f:
+            prev_ids = {line.strip() for line in f if line.strip()} - {'None'}
+        self.articles = list(filter(lambda a: a.data['pmid'] not in prev_ids, self.articles))
+
     @staticmethod
-    def parse(doc, file):
+    def parse(doc, file, use_all_secs=True):
         from tqdm import tqdm
 
         articles = []
@@ -59,7 +95,7 @@ class Dataset:
                 continue
 
             a = Article()
-            a.lxml2json(article)
+            a.lxml2json(article, use_all_secs=use_all_secs)
 
             articles.append(a)
         return articles
@@ -73,7 +109,7 @@ class Dataset:
         # if_native = lambda x: x == {'United States'}
         # if_non_native = lambda x: not (x & en)
         if_non_native = lambda x: x == {'China'}
-        if_useless = lambda x: (not x) # or (None in x)
+        if_useless = lambda x: (not x)  # or (None in x)
 
         articles_non_native = []
         articles_native = []
@@ -83,14 +119,15 @@ class Dataset:
         for article in pbar:
             countries = article.set_countries(country_checker)
             # item = (article.data['countries'], article.data['affs'])
-            if if_useless(countries): continue
-            if if_native(countries):
+            if if_useless(countries): continue # articles_non_native.append(article)
+            elif if_native(countries):
                 articles_native.append(article)
             elif if_non_native(countries):
                 articles_non_native.append(article)
 
             total_len = len(articles_non_native) + len(articles_native)
-            pbar.set_description('Got {} valid countries'.format(total_len), refresh=True)
+            pbar.set_description('Got {} valid countries'.format(total_len),
+                                 refresh=True)
 
         return articles_non_native, articles_native
 
@@ -103,10 +140,15 @@ class Dataset:
         nlp = NLP()
         text = []
 
-        pbar = tqdm(articles, desc='{} sents to {}'.format(0,file))
+        pbar = tqdm(articles, desc='{} sents to {}'.format(0, file))
         for article in pbar:
             text += article.clean_paper(nlp)
-            pbar.set_description('{} sents to {}'.format(len(text),file), refresh=True)
+            pbar.set_description('{} sents to {}'.format(len(text), file),
+                                 refresh=True)
+
+        text = list(set(text))
+        import random
+        random.shuffle(text)
 
         if file:
             fwrite('\n'.join(text), file)
@@ -120,6 +162,8 @@ class Dataset:
             import random
 
             min_len = min(len(native_txt), len(non_native_txt))
+            if min_len < eval_size:
+                eval_size = 0
             min_len -= eval_size
             random.shuffle(native_txt)
             random.shuffle(non_native_txt)
@@ -129,7 +173,6 @@ class Dataset:
 
             native_txt = native_txt[:min_len]
             non_native_txt = non_native_txt[:min_len]
-            import pdb;pdb.set_trace()
         return native_txt, non_native_txt, eval_native, eval_non_native
 
     @staticmethod
@@ -187,21 +230,28 @@ class Article:
         'italic',
         'bold',
         'xref',
-        # 'supplementary-material',
-        # 'fig',
-        # 'label',
-        # 'caption',
-        # 'ext-link',
-        # 'title',
+    ]
+    USELESS_TAGS = [
+        'supplementary-material',
+        'inline-supplementary-material',
+        'fig',
+        'label',
+        'caption',
+        'ext-link',
+        'title',
+        'table-wrap',
     ]
 
     def __init__(self, lxml_data=None):
         self.lxml_data = lxml_data
 
-    def lxml2json(self, article):
+    def lxml2json(self, article, use_all_secs=True):
         front = lxml_get_1elem(article, './/front')
 
-        # pmid = lxml_get_1elem(front, './/article-id[@pub-id-type="pmid"]').text
+        try:
+            pmid = lxml_get_1elem(front, './/article-id[@pub-id-type="pmid"]').text
+        except:
+            pmid = 'None'
         # title = lxml_get_1elem(front, './/title-group//article-title').text
         # authors = front.xpath('.//contrib[@contrib-type="author"]')
         # authors = self._clean_authors(authors)
@@ -215,38 +265,59 @@ class Article:
         abstracts = front.xpath('.//abstract//p')
         abstracts = lxml_elem_list2text_list(abstracts)
 
-        body = article.xpath('.//body//sec//p')
-        paper = [''.join(sec.itertext(*self.TEXT_TAGS)).strip() for sec in body]
+        body = lxml_get_1elem(article, './/body')
+        body = self._clean_body(body)
+        if use_all_secs:
+            paper = [''.join(sec.itertext(*self.TEXT_TAGS)).strip()
+                     for sec in body.xpath('.//sec//p')]
+        else:
+            paper = [''.join(sec.itertext(*self.TEXT_TAGS)).strip()
+                     for sec in body.xpath('.//sec[@sec-type="intro"]//p')]
+            paper += [''.join(sec.itertext(*self.TEXT_TAGS)).strip()
+                      for sec in
+                      body.xpath('.//sec[@sec-type="conclusion"]//p')]
         paper = abstracts + paper
         paper = [sec for sec in paper if len(sec.split()) > 10]
 
         data = {
             'domains': domains,
-            'affs': affs,
+            'pmid': pmid,
             'paper': paper,
         }
         self.data = data
 
-    def set_countries(self, country_checker):
-        coun = [country_checker.get_institution_country(d, enable_warning=False)
-                for d in self.data['domains']]
-        val_coun = set(coun) - {None}
-        self.data['countries'] = val_coun
-        return val_coun
+    def _clean_body(self, body):
+        for tag in self.USELESS_TAGS:
+            for elem in body.xpath('.//{}'.format(tag)):
+                parent = elem.getparent()
+                parent.remove(elem)
+        return body
 
     def clean_paper(self, nlp):
         from efficiency.function import flatten_list
         text = [
             nlp.sent_tokenize(nlp.word_tokenize(s.replace('et al.', 'et al')))
             for s in self.data['paper']]
-        text = flatten_list(text)
+        text = [sent for sent in flatten_list(text) if len(sent.split()) > 8]
         self.data['paper'] = text
         return text
+
+    def set_countries(self, country_checker):
+        if 'countries' in self.data: return self.data['countries']
+        try:
+            coun = [
+                country_checker.get_institution_country(d, enable_warning=False)
+                for d in self.data['domains']]
+        except:
+            coun = []
+        val_coun = set(coun) - {None}
+        self.data['countries'] = val_coun
+        return val_coun
 
     @staticmethod
     def _clean_domains(domains):
         domains = [d.split('@')[-1].strip('.') for d in domains]
-        domains = list(set(domains) - set(''))
+        domains = list(set(domains) - {'', None})
         return domains
 
     @staticmethod
@@ -281,8 +352,6 @@ class Article:
                 'xref': ref_text,
             })
         return author_dics
-
-
 
 
 class CountryChecker(EmailCountryChecker):
@@ -364,13 +433,14 @@ def main():
 
     folder = 'data/'
     fnames = [
-        # 'pmc_result.small.xml',
-        'pmc_result_20100101_20161231.xml',
-        'pmc_result_20170101_20191016.xml',
+        # 'pmc_result.xml',
+        # 'pmc_result_one_good.xml',
+        'pmc_result_china_journal2.xml',
+        'pmc_result_china_PMC_live_date2.xml',
     ]
     files = [os.path.join(folder, fname) for fname in fnames]
 
-    dataset = Dataset(files)
+    dataset = Dataset(files, use_all_secs=False, save_to=3)
 
 
 if __name__ == '__main__':
